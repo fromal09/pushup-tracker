@@ -196,8 +196,8 @@ export default function PushupTracker() {
   const tabRef      = useRef<'track' | 'stats'>('track');
   const haloKey     = useRef<number>(0);
 
-  const [tab,      setTab]      = useState<'track' | 'stats'>('track');
-  const setTabSynced = (t: 'track' | 'stats') => {
+  const [tab,      setTab]      = useState<'track' | 'stats' | 'height'>('track');
+  const setTabSynced = (t: 'track' | 'stats' | 'height') => {
     if (t !== 'track' && tabRef.current === 'track') {
       setSessionBreaks(prev => [...prev, Date.now()]);
     }
@@ -577,7 +577,7 @@ export default function PushupTracker() {
       {phase === 'active' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', borderBottom: `1.5px solid ${EDGE}`, background: SURF }}>
-            {(['track', 'stats'] as const).map(t => (
+            {(['track', 'stats', 'height'] as const).map(t => (
               <button key={t} onClick={() => setTabSynced(t)}
                 className={tab === t ? 'tab-active' : 'tab-inactive'}
                 style={{ flex: 1, background: 'none', border: 'none', fontSize: '.65rem', letterSpacing: '.38em', textTransform: 'uppercase', padding: '.9rem 0', marginBottom: '-1.5px' }}>
@@ -731,6 +731,71 @@ export default function PushupTracker() {
               </div>
             </div>
           )}
+
+          {/* ── HEIGHT ───────────────────────────────────────────────────────── */}
+          {tab === 'height' && (
+            <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1rem', background: BG }}>
+              <div style={{ maxWidth: 500, margin: '0 auto' }}>
+
+                {/* Current height hero */}
+                <div style={{ textAlign: 'center', marginBottom: '1.5rem', padding: '1.25rem', background: SURF, border: `1.5px solid ${EDGE}` }}>
+                  <div style={{ fontSize: '.55rem', letterSpacing: '.38em', color: DIM, textTransform: 'uppercase', marginBottom: '.4rem' }}>Your stack height</div>
+                  <div className="enum" style={{ fontSize: 'clamp(2rem,10vw,4rem)', fontWeight: 900, lineHeight: 1 }}>
+                    {fmtMilestoneM(stats.total * REP_DEPTH_M)}
+                  </div>
+                  <div style={{ fontSize: '.75rem', color: DIM, marginTop: '.4rem' }}>
+                    {stats.total.toLocaleString()} reps × 30cm each
+                  </div>
+                </div>
+
+                {HEIGHT_MILESTONES.map(sec => {
+                  const heightM = stats.total * REP_DEPTH_M;
+                  return (
+                    <div key={sec.section} style={{ marginBottom: '1.5rem', background: SURF, border: `1.5px solid ${EDGE}`, padding: '1rem 1rem .5rem', boxShadow: '0 1px 8px rgba(26,63,255,.05)' }}>
+                      <div style={{ fontSize: '.58rem', letterSpacing: '.4em', color: ELEC, textTransform: 'uppercase', marginBottom: '.75rem', paddingBottom: '.5rem', borderBottom: `1px solid ${EDGE}`, textShadow: '0 0 10px rgba(26,63,255,.5)' }}>
+                        {sec.section}
+                      </div>
+                      {sec.items.map(item => {
+                        const reached  = heightM >= item.m;
+                        const pct      = Math.min(100, (heightM / item.m) * 100);
+                        const allUnreached = sec.items.filter(i => heightM < i.m);
+                        const isNext   = !reached && allUnreached.indexOf(item) === 0;
+
+                        return (
+                          <div key={item.label} style={{ marginBottom: '.6rem', opacity: reached || isNext ? 1 : 0.4 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '.2rem' }}>
+                              <div style={{ fontSize: '.88rem', color: TEXT, display: 'flex', alignItems: 'center', gap: '.4rem' }}>
+                                <span>{item.icon}</span>
+                                <span>{item.label}</span>
+                                {item.note && <span style={{ fontSize: '.72rem', color: DIM }}>{item.note}</span>}
+                                {isNext && <span style={{ fontSize: '.6rem', padding: '1px 7px', background: 'rgba(26,63,255,.1)', color: ELEC, borderRadius: 20, letterSpacing: '.05em' }}>next</span>}
+                                {reached && <span style={{ fontSize: '.6rem', padding: '1px 7px', background: 'rgba(0,229,122,.12)', color: '#00a855', borderRadius: 20, letterSpacing: '.05em' }}>done</span>}
+                              </div>
+                              <div style={{ fontSize: '.72rem', color: reached ? item.color : DIM, fontFamily: "'Orbitron',monospace", textAlign: 'right' }}>
+                                {reached ? fmtMilestoneM(item.m) : fmtMilestoneReps(item.m) + ' reps'}
+                              </div>
+                            </div>
+                            <div style={{ height: 5, background: EDGE, borderRadius: 3, overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%',
+                                width: pct.toFixed(1) + '%',
+                                background: reached ? item.color : `linear-gradient(90deg, ${ELEC}, ${PINK})`,
+                                borderRadius: 3,
+                                boxShadow: reached ? `0 0 6px ${item.color}` : '0 0 6px rgba(26,63,255,.4)',
+                                transition: 'width .5s ease',
+                              }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+
+              </div>
+            </div>
+          )}
+
         </div>
       )}
     </div>
