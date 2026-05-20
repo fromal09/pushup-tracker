@@ -191,9 +191,11 @@ export default function PushupTracker() {
   const incTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downMinBRef = useRef<number>(Infinity);
   const lastRepTs   = useRef<number>(0);
+  const tabRef      = useRef<'track' | 'stats'>('track');
   const haloKey     = useRef<number>(0);
 
   const [tab,      setTab]      = useState<'track' | 'stats'>('track');
+  const setTabSynced = (t: 'track' | 'stats') => { tabRef.current = t; setTab(t); };
   const [phase,    setPhase]    = useState<'intro' | 'cal' | 'active'>('intro');
   const [calStep,  setCalStep]  = useState<'up' | 'down'>('up');
   const [calUp,    setCalUp]    = useState<number | null>(null);
@@ -270,6 +272,20 @@ export default function PushupTracker() {
     : sessionReps === stats.sessionPR ? 'matching'
     : 'chasing'
     : 'chasing';
+
+  // ── Pause on visibility change
+  useEffect(() => {
+    const onHide = () => {
+      if (document.hidden) {
+        posRef.current = 'up';
+        setPosState('up');
+        if (incTimer.current) clearTimeout(incTimer.current);
+        downMinBRef.current = Infinity;
+      }
+    };
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, []);
 
   // ── Brightness sampler ─────────────────────────────────────────────────────
   const sample = useCallback((): number | null => {
@@ -358,7 +374,7 @@ export default function PushupTracker() {
       const b = sample();
       if (b != null) {
         if (posRef.current === 'down') downMinBRef.current = Math.min(downMinBRef.current, b);
-        if (posRef.current === 'up' && b <= dnLine && Date.now() - lastRepTs.current > MIN_REP_MS) {
+        if (posRef.current === 'up' && b <= dnLine && Date.now() - lastRepTs.current > MIN_REP_MS && tabRef.current === 'track') {
           posRef.current = 'down'; setPosState('down'); downMinBRef.current = b;
           incTimer.current = setTimeout(() => {
             if (posRef.current !== 'down') return;
@@ -368,7 +384,7 @@ export default function PushupTracker() {
             setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
             posRef.current = 'up'; setPosState('up'); downMinBRef.current = Infinity;
           }, INCOMPLETE_TIMEOUT_MS);
-        } else if (posRef.current === 'down' && b >= upLine) {
+        } else if (posRef.current === 'down' && b >= upLine && tabRef.current === 'track') {
           clearTimeout(incTimer.current!);
           const raw = downMinBRef.current;
           const depth = 1 - Math.max(0, Math.min(range, raw - calDown)) / range;
@@ -539,7 +555,7 @@ export default function PushupTracker() {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', borderBottom: `1.5px solid ${EDGE}`, background: SURF }}>
             {(['track', 'stats'] as const).map(t => (
-              <button key={t} onClick={() => setTab(t)}
+              <button key={t} onClick={() => setTabSynced(t)}
                 className={tab === t ? 'tab-active' : 'tab-inactive'}
                 style={{ flex: 1, background: 'none', border: 'none', fontSize: '.65rem', letterSpacing: '.38em', textTransform: 'uppercase', padding: '.9rem 0', marginBottom: '-1.5px' }}>
                 {t}
