@@ -42,6 +42,7 @@ interface Stats {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const GOAL                  = 1_000_000;
 const SESSION_GAP_MS        = 10 * 60 * 1000;
+const MIN_REP_MS            = 1500;
 const INCOMPLETE_TIMEOUT_MS = 5 * 1000;
 
 const fmt = (n: number) => n.toLocaleString('en-US');
@@ -189,6 +190,7 @@ export default function PushupTracker() {
   const posRef      = useRef<'up' | 'down'>('up');
   const incTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downMinBRef = useRef<number>(Infinity);
+  const lastRepTs   = useRef<number>(0);
   const haloKey     = useRef<number>(0);
 
   const [tab,      setTab]      = useState<'track' | 'stats'>('track');
@@ -348,22 +350,22 @@ export default function PushupTracker() {
     const range = calUp - calDown;
     if (range < 8) { setBadCal(true); return; }
     setBadCal(false);
-    const dnLine = calDown + range * 0.30;
-    const upLine = calUp   - range * 0.30;
+    const dnLine = calDown + range * 0.18;
+    const upLine = calUp   - range * 0.18;
     posRef.current = 'up'; downMinBRef.current = Infinity;
 
     const tick = () => {
       const b = sample();
       if (b != null) {
         if (posRef.current === 'down') downMinBRef.current = Math.min(downMinBRef.current, b);
-        if (posRef.current === 'up' && b <= dnLine) {
+        if (posRef.current === 'up' && b <= dnLine && Date.now() - lastRepTs.current > MIN_REP_MS) {
           posRef.current = 'down'; setPosState('down'); downMinBRef.current = b;
           incTimer.current = setTimeout(() => {
             if (posRef.current !== 'down') return;
             const raw = downMinBRef.current;
             const depth = 1 - Math.max(0, Math.min(range, raw - calDown)) / range;
             const rep: Rep = { ts: Date.now(), complete: false, depth };
-            setReps(p => [...p, rep]); saveRep(rep);
+            setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
             posRef.current = 'up'; setPosState('up'); downMinBRef.current = Infinity;
           }, INCOMPLETE_TIMEOUT_MS);
         } else if (posRef.current === 'down' && b >= upLine) {
@@ -371,7 +373,7 @@ export default function PushupTracker() {
           const raw = downMinBRef.current;
           const depth = 1 - Math.max(0, Math.min(range, raw - calDown)) / range;
           const rep: Rep = { ts: Date.now(), complete: true, depth };
-          setReps(p => [...p, rep]); saveRep(rep);
+          setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
           setFlash(true); haloKey.current++; setHaloId(haloKey.current);
           setTimeout(() => setFlash(false), 260);
           posRef.current = 'up'; setPosState('up'); downMinBRef.current = Infinity;
