@@ -183,6 +183,57 @@ const SHEET = `
 `;
 
 // ─── Component ────────────────────────────────────────────────────────────────
+const REP_DEPTH_M = 0.30;
+
+interface Milestone { label: string; note: string; m: number; color: string; icon: string; }
+interface MilestoneSection { section: string; items: Milestone[]; }
+
+const HEIGHT_MILESTONES: MilestoneSection[] = [
+  { section: 'People & everyday things', items: [
+    { label: 'David (age 7)',         note: 'Your kid',                 m: 1.22,   color: '#1a3fff', icon: '👦' },
+    { label: 'You (6 ft)',            note: '',                         m: 1.83,   color: '#1a3fff', icon: '🧍' },
+    { label: 'Basketball hoop',       note: '',                         m: 3.05,   color: '#00e57a', icon: '🏀' },
+    { label: 'Two-story house',       note: '',                         m: 7.6,    color: '#00e57a', icon: '🏠' },
+  ]},
+  { section: 'Trees', items: [
+    { label: 'Ponderosa pine',        note: 'Colorado native',          m: 30,     color: '#3B6D11', icon: '🌲' },
+    { label: 'Giant sequoia',         note: 'Tallest species',          m: 84,     color: '#3B6D11', icon: '🌲' },
+    { label: 'Hyperion',              note: "World's tallest tree",     m: 115.9,  color: '#3B6D11', icon: '🌲' },
+  ]},
+  { section: 'Famous structures', items: [
+    { label: 'Statue of Liberty',     note: 'Torch to base',            m: 93,     color: '#7F77DD', icon: '🗽' },
+    { label: 'Eiffel Tower',          note: '',                         m: 330,    color: '#7F77DD', icon: '🗼' },
+    { label: 'Burj Khalifa',          note: "World\'s tallest building", m: 828,  color: '#7F77DD', icon: '🏙️' },
+  ]},
+  { section: 'Mountains', items: [
+    { label: 'Pikes Peak',            note: 'Colorado icon',            m: 4302,   color: '#888780', icon: '⛰️' },
+    { label: 'Longs Peak',            note: 'Your backyard',            m: 4346,   color: '#888780', icon: '⛰️' },
+    { label: 'Mont Blanc',            note: 'Highest in Alps',          m: 4808,   color: '#888780', icon: '⛰️' },
+    { label: 'Denali',                note: 'Highest in N. America',    m: 6190,   color: '#5F5E5A', icon: '⛰️' },
+    { label: 'Mount Everest',         note: "World\'s highest peak",   m: 8849,   color: '#5F5E5A', icon: '🏔️' },
+  ]},
+  { section: 'Space', items: [
+    { label: 'Edge of space',         note: 'Kármán line — 100 km',    m: 100000, color: '#185FA5', icon: '🚀' },
+    { label: 'ISS orbit',             note: '408 km up',                m: 408000, color: '#185FA5', icon: '🛸' },
+    { label: '1,000,000 reps',        note: '300 km — the goal',        m: 300000, color: '#ff0077', icon: '⚡' },
+  ]},
+];
+
+function fmtMilestoneM(m: number): string {
+  if (m >= 1000000) return (m / 1000000).toFixed(2) + 'M km';
+  if (m >= 1000)    return Math.round(m / 1000) + ' km';
+  if (m >= 100)     return Math.round(m) + ' m';
+  if (m >= 1)       return m.toFixed(1) + ' m';
+  return Math.round(m * 100) + ' cm';
+}
+
+function fmtMilestoneReps(m: number): string {
+  const r = Math.ceil(m / REP_DEPTH_M);
+  if (r >= 1000000) return (r / 1000000).toFixed(2) + 'M';
+  if (r >= 1000)    return Math.round(r / 1000) + 'k';
+  return r.toLocaleString();
+}
+
 export default function PushupTracker() {
   const videoRef    = useRef<HTMLVideoElement>(null);
   const samplerCvs  = useRef<HTMLCanvasElement>(null);
