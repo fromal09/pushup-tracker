@@ -350,14 +350,14 @@ export default function PushupTracker() {
         const W = p?.offsetWidth || 320, H = p?.offsetHeight || 240;
         dc.width = W; dc.height = H; oc.width = W; oc.height = H;
         if (v && v.readyState >= 2 && v.videoWidth) {
-          const dctx = dc.getContext('2d');
+          const dctx = dc.getContext('2d')!;
           const vAR = v.videoWidth / v.videoHeight, cAR = W / H;
           let sx, sy, sw, sh;
           if (vAR > cAR) { sh = v.videoHeight; sw = sh * cAR; sx = (v.videoWidth - sw) / 2; sy = 0; }
           else            { sw = v.videoWidth;  sh = sw / cAR; sx = 0; sy = (v.videoHeight - sh) / 2; }
           dctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
         }
-        const ctx = oc.getContext('2d');
+        const ctx = oc.getContext('2d')!;
         ctx.clearRect(0, 0, W, H);
         const cx = W / 2, cy = H / 2;
         const rx = Math.min(W, H) * 0.28, ry = Math.min(W, H) * 0.40;
