@@ -438,7 +438,7 @@ export default function PushupTracker() {
           <div style={{ position: 'absolute', top: '38%', left: '50%', transform: 'translate(-50%,-50%)', width: 600, height: 300, background: 'radial-gradient(ellipse,rgba(26,63,255,.1) 0%,transparent 70%)', pointerEvents: 'none' }} />
           <div style={{ position: 'relative', maxWidth: 480 }}>
             <div style={{ fontSize: '.58rem', letterSpacing: '.6em', color: DIM, textTransform: 'uppercase', marginBottom: '2.5rem' }}>Lifetime Mission</div>
-            <div className="enum" style={{ fontSize: 'clamp(3rem,15vw,7.5rem)', fontWeight: 900, lineHeight: 0.88, marginBottom: '1.2rem' }}>{fmt(GOAL)}</div>
+            <div className="enum" style={{ fontSize: 'clamp(2rem,10vw,5.5rem)', fontWeight: 900, lineHeight: 0.88, textAlign: 'center', width: '100%', marginBottom: '1.2rem' }}>{fmt(GOAL)}</div>
             <div style={{ fontSize: '.75rem', letterSpacing: '.4em', color: DIM, textTransform: 'uppercase', marginBottom: '3.5rem' }}>push-ups to zero</div>
             {stats.total > 0 && (
               <div style={{ marginBottom: '1.5rem', padding: '.75rem 1.25rem', background: SURF, border: `1.5px solid ${EDGE}` }}>
