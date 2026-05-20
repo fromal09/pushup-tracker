@@ -36,6 +36,7 @@ interface Stats {
   lifetime:   number;
   incRate:    string;
   sessionPR:  number;
+  dayPR:      number;
   estDays:    number | null;
 }
 
@@ -245,7 +246,10 @@ export default function PushupTracker() {
   const downMinBRef = useRef<number>(Infinity);
   const lastRepTs   = useRef<number>(0);
   const tabRef      = useRef<'track' | 'stats' | 'height'>('track');
-  const haloKey      = useRef<number>(0);
+  const haloKey         = useRef<number>(0);
+  const sessionDrawCvs  = useRef<HTMLCanvasElement>(null);
+  const sessionOvlCvs   = useRef<HTMLCanvasElement>(null);
+  const sessionDrawRaf  = useRef<number>(0);
   const calPhaseRef  = useRef<'position' | 'countdown'>('position');
   const calSamples   = useRef<number[]>([]);
   const calStabBuf   = useRef<number[]>([]);
@@ -270,7 +274,8 @@ export default function PushupTracker() {
   const [flash,    setFlash]    = useState(false);
   const [haloId,   setHaloId]   = useState<number | null>(null);
   const [badCal,   setBadCal]   = useState(false);
-  const [reps,     setReps]     = useState<Rep[]>([]);
+  const [reps,        setReps]       = useState<Rep[]>([]);
+  const [sessionActive, setSessionActive] = useState(false);
   const [sessionBreaks, setSessionBreaks] = useState<number[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [saveErr,  setSaveErr]  = useState(false);
@@ -299,6 +304,43 @@ export default function PushupTracker() {
     }).catch(() => setSaveErr(true));
   }, []);
 
+
+  // ── Session camera draw + position overlay ──────────────────────────────────
+  useEffect(() => {
+    if (phase !== 'active' || !sessionActive) return;
+    let alive = true;
+    const loop = () => {
+      if (!alive) return;
+      const dc = sessionDrawCvs.current, oc = sessionOvlCvs.current, v = videoRef.current;
+      if (dc && oc) {
+        const p = dc.parentElement;
+        const W = p?.offsetWidth || 320, H = p?.offsetHeight || 240;
+        dc.width = W; dc.height = H; oc.width = W; oc.height = H;
+        if (v && v.readyState >= 2 && v.videoWidth) {
+          const dctx = dc.getContext('2d')!;
+          const vAR = v.videoWidth / v.videoHeight, cAR = W / H;
+          let sx: number, sy: number, sw: number, sh: number;
+          if (vAR > cAR) { sh = v.videoHeight; sw = sh * cAR; sx = (v.videoWidth - sw) / 2; sy = 0; }
+          else            { sw = v.videoWidth;  sh = sw / cAR; sx = 0; sy = (v.videoHeight - sh) / 2; }
+          dctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
+        }
+        const ctx = oc.getContext('2d')!;
+        ctx.clearRect(0, 0, W, H);
+        const cx = W / 2, cy = H / 2;
+        const rx = Math.min(W, H) * 0.28, ry = Math.min(W, H) * 0.40;
+        const ringColor = posRef.current === 'down' ? '#ff2244' : '#1a3fff';
+        ctx.save();
+        ctx.shadowColor = ringColor; ctx.shadowBlur = 18;
+        ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = ringColor; ctx.lineWidth = 2.5;
+        ctx.stroke(); ctx.restore();
+      }
+      sessionDrawRaf.current = requestAnimationFrame(loop);
+    };
+    sessionDrawRaf.current = requestAnimationFrame(loop);
+    return () => { alive = false; cancelAnimationFrame(sessionDrawRaf.current); };
+  }, [phase, sessionActive]);
+
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats: Stats = useMemo(() => {
     const done = reps.filter(r => r.complete);
@@ -323,6 +365,8 @@ export default function PushupTracker() {
     const lifetime   = Math.max(0, GOAL - done.length);
     const incRate    = reps.length ? ((fail.length / reps.length) * 100).toFixed(1) : '0.0';
     const sessionPR  = sorted[0]?.complete || 0;
+    const todaySessions = sessions.filter(s => new Date(s.startTs).toDateString() === todayStr);
+    const dayPR = todaySessions.length ? Math.max(...todaySessions.map(s => s.complete)) : 0;
     let estDays: number | null = null;
     if (done.length && reps.length) {
       const span = Math.max(1, (Date.now() - reps[0].ts) / 86400000);
@@ -330,7 +374,7 @@ export default function PushupTracker() {
     }
     return { total: done.length, incomplete: fail.length, sessions, streaks,
              todayN, weekN, dayDist, hourDist, failDay, bestSession: sorted[0] || null,
-             avgPerSess, avgDepth, bestDay, lifetime, incRate, sessionPR, estDays };
+             avgPerSess, avgDepth, bestDay, lifetime, incRate, sessionPR, dayPR, estDays };
   }, [reps, sessionBreaks]);
 
   const sessionReps = useMemo(() => {
@@ -339,9 +383,10 @@ export default function PushupTracker() {
     return reps.filter(r => r.ts >= cut && r.complete).length;
   }, [reps]);
 
-  const prState = sessionReps > 0 && stats.sessionPR > 0
-    ? sessionReps > stats.sessionPR  ? 'new'
-    : sessionReps === stats.sessionPR ? 'matching'
+  const bestPR  = Math.max(stats.sessionPR, stats.dayPR);
+  const prState = sessionReps > 0 && bestPR > 0
+    ? sessionReps > bestPR  ? 'new'
+    : sessionReps === bestPR ? 'matching'
     : 'chasing'
     : 'chasing';
 
@@ -491,7 +536,7 @@ export default function PushupTracker() {
 
   // ── Active tracking loop ───────────────────────────────────────────────────
   useEffect(() => {
-    if (phase !== 'active' || calUp == null || calDown == null) return;
+    if (phase !== 'active' || !sessionActive || calUp == null || calDown == null) return;
     const range = calUp - calDown;
     if (range < 8) { setBadCal(true); return; }
     setBadCal(false);
@@ -528,7 +573,7 @@ export default function PushupTracker() {
     };
     raf.current = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(raf.current); if (incTimer.current) clearTimeout(incTimer.current); };
-  }, [phase, calUp, calDown, sample, saveRep]);
+  }, [phase, sessionActive, calUp, calDown, sample, saveRep]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   const handleBegin = () => {
@@ -561,6 +606,19 @@ export default function PushupTracker() {
     cancelAnimationFrame(raf.current);
     if (incTimer.current) clearTimeout(incTimer.current);
     setCalUp(null); setCalDown(null); setCalStep('up'); setPhase('cal');
+  };
+
+
+  const handleBeginSession = () => {
+    setSessionBreaks(prev => [...prev, Date.now()]);
+    setSessionActive(true);
+  };
+  const handleEndSession = () => {
+    cancelAnimationFrame(sessionDrawRaf.current);
+    setSessionBreaks(prev => [...prev, Date.now()]);
+    setSessionActive(false);
+    setPosState('up');
+    posRef.current = 'up';
   };
 
   const pctDone   = (GOAL - stats.lifetime) / GOAL;
@@ -729,69 +787,112 @@ export default function PushupTracker() {
           {/* ── TRACK ────────────────────────────────────────────────────── */}
           {tab === 'track' && (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-              {/* Session PR hero */}
-              <div style={{
-                background: prState === 'new' ? 'linear-gradient(135deg,rgba(255,0,119,.07),rgba(255,0,119,.03))' : prState === 'matching' ? 'linear-gradient(135deg,rgba(0,229,122,.07),rgba(0,229,122,.03))' : SURF,
-                borderBottom: `1.5px solid ${EDGE}`, padding: '1.1rem 1.25rem',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative', overflow: 'hidden',
-              }}>
-                {prState !== 'chasing' && (
-                  <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 400, height: 160, pointerEvents: 'none', background: prState === 'new' ? 'radial-gradient(ellipse,rgba(255,0,119,.12) 0%,transparent 70%)' : 'radial-gradient(ellipse,rgba(0,229,122,.12) 0%,transparent 70%)' }} />
-                )}
-                <div style={{ fontSize: '.55rem', letterSpacing: '.45em', color: prColor, textTransform: 'uppercase', marginBottom: '.35rem', textShadow: prState !== 'chasing' ? `0 0 10px ${prColor}` : '' }}>{prLabel}</div>
-                <div className={prClass} style={{ fontSize: 'clamp(2.5rem,11vw,5rem)', fontWeight: 900, lineHeight: 1 }}>{sessionReps}</div>
-              </div>
 
-              {/* Status bar */}
-              <div style={{ padding: '.6rem 1.25rem', borderBottom: `1px solid ${EDGE}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: SURF }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                  <div className={posState === 'down' ? 'down-dot' : 'up-dot'} style={{ width: 9, height: 9, borderRadius: '50%' }} />
-                  <span style={{ fontSize: '.6rem', letterSpacing: '.3em', color: DIM, textTransform: 'uppercase' }}>{posState === 'down' ? 'DOWN' : 'UP'}</span>
-                </div>
-                <div style={{ display: 'flex', gap: '.5rem' }}>
-                  <GhostBtn onClick={handleRecal}>Recal</GhostBtn>
-                  <GhostBtn onClick={() => { cancelAnimationFrame(raf.current); setSessionBreaks(prev => [...prev, Date.now()]); setPhase('intro'); }}>Done</GhostBtn>
-                </div>
-              </div>
+              {!sessionActive ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '1.25rem', gap: '1rem', background: BG }}>
 
-              {/* Lifetime countdown */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '1.5rem', gap: '1rem', position: 'relative' }}>
-                <div style={{ position: 'absolute', top: '40%', left: '50%', transform: 'translate(-50%,-50%)', width: 500, height: 240, background: 'radial-gradient(ellipse,rgba(26,63,255,.07) 0%,transparent 70%)', pointerEvents: 'none' }} />
-                {badCal && <div style={{ color: NRED, fontSize: '.78rem', letterSpacing: '.1em', textAlign: 'center' }}>Poor calibration — tap Recal</div>}
+                  {/* Dual PR hero */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '.75rem' }}>
+                    {([
+                      { label: 'Session PR', value: stats.sessionPR, color: ELEC },
+                      { label: 'Day PR',     value: stats.dayPR,     color: PINK },
+                    ] as const).map(({ label, value, color }) => (
+                      <div key={label} style={{ background: SURF, border: `1.5px solid ${EDGE}`, padding: '1rem .75rem', textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
+                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '140%', height: '100%', background: `radial-gradient(ellipse,${color}12 0%,transparent 70%)`, pointerEvents: 'none' }} />
+                        <div style={{ fontSize: '.52rem', letterSpacing: '.38em', color, textTransform: 'uppercase', marginBottom: '.4rem', textShadow: `0 0 8px ${color}` }}>{label}</div>
+                        <div className="enum" style={{ fontSize: 'clamp(1.8rem,9vw,3.5rem)', fontWeight: 900, lineHeight: 1 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
 
-                <Lbl>Remaining</Lbl>
+                  {/* Lifetime */}
+                  <div style={{ background: SURF, border: `1.5px solid ${EDGE}`, padding: '1rem 1.25rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '.5rem' }}>
+                      <Lbl>Remaining</Lbl>
+                      <div style={{ position: 'relative', display: 'inline-block' }}>
+                        {haloId && <div key={haloId} className="neon-ring" style={{ width: 200, height: 80, background: 'radial-gradient(ellipse,rgba(255,0,119,.28) 0%,transparent 70%)' }} />}
+                        <div className={`enum${flash ? ' flash' : ''}`} style={{ fontSize: 'clamp(1.4rem,7vw,2.8rem)', fontWeight: 900, lineHeight: 1 }}>{fmt(stats.lifetime)}</div>
+                      </div>
+                    </div>
+                    <div style={{ height: 3, background: EDGE, borderRadius: 2 }}>
+                      <div style={{ height: '100%', width: `${pctDone * 100}%`, borderRadius: 2, background: `linear-gradient(90deg,${ELEC},${PINK})`, boxShadow: '0 0 8px rgba(26,63,255,.45)' }} />
+                    </div>
+                    <div style={{ fontSize: '.52rem', color: DIM, letterSpacing: '.15em', marginTop: '.4rem' }}>{(pctDone * 100).toFixed(6)}% complete</div>
+                  </div>
 
-                <div style={{ position: 'relative', display: 'inline-block' }}>
-                  {haloId && (
-                    <div key={haloId} className="neon-ring"
-                      style={{ width: 280, height: 120, background: 'radial-gradient(ellipse,rgba(255,0,119,.32) 0%,transparent 70%)' }} />
-                  )}
-                  <div className={`enum${flash ? ' flash' : ''}`}
-                    style={{ fontSize: 'clamp(2rem,11vw,6rem)', fontWeight: 900, lineHeight: 1, letterSpacing: '-.02em' }}>
-                    {fmt(stats.lifetime)}
+                  {/* Quick stats */}
+                  <div style={{ display: 'flex', gap: '.75rem' }}>
+                    {[
+                      { label: 'Today',  value: fmt(stats.todayN) },
+                      { label: 'Streak', value: `${stats.streaks.current}d` },
+                      { label: 'Week',   value: fmt(stats.weekN) },
+                    ].map(({ label, value }) => (
+                      <div key={label} style={{ flex: 1, background: SURF, border: `1.5px solid ${EDGE}`, padding: '.7rem .5rem', textAlign: 'center' }}>
+                        <div className="enum" style={{ fontSize: 'clamp(1rem,5vw,1.6rem)', fontWeight: 700, lineHeight: 1 }}>{value}</div>
+                        <Lbl style={{ marginTop: '.25rem' }}>{label}</Lbl>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ flex: 1 }} />
+
+                  <button className="primary-btn" onClick={handleBeginSession}
+                    style={{ width: '100%', fontSize: '1.2rem', padding: '1.1rem', fontFamily: "'Barlow Condensed', sans-serif", background: '#00e57a', boxShadow: '0 0 18px rgba(0,229,122,.55)', color: '#05051c' }}>
+                    Begin Session
+                  </button>
+                  <div style={{ display: 'flex', gap: '.5rem' }}>
+                    <GhostBtn onClick={handleRecal}>Recalibrate</GhostBtn>
+                    <GhostBtn onClick={() => { cancelAnimationFrame(raf.current); setPhase('intro'); }}>Exit</GhostBtn>
                   </div>
                 </div>
 
-                <div style={{ width: '100%', maxWidth: 360, height: 3, background: EDGE, borderRadius: 2 }}>
-                  <div style={{ height: '100%', width: `${pctDone * 100}%`, borderRadius: 2, background: `linear-gradient(90deg,${ELEC},${PINK})`, boxShadow: '0 0 8px rgba(26,63,255,.45)', transition: 'width .4s' }} />
-                </div>
-                <div style={{ fontSize: '.55rem', letterSpacing: '.18em', color: DIM }}>{(pctDone * 100).toFixed(6)}% complete</div>
+              ) : (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
 
-                <div style={{ width: '100%', maxWidth: 360, borderTop: `1.5px solid ${EDGE}`, margin: '.25rem 0' }} />
-
-                <div style={{ display: 'flex', gap: '3rem', textAlign: 'center' }}>
-                  {[
-                    { label: 'Today',       value: fmt(stats.todayN) },
-                    { label: 'Streak',      value: `${stats.streaks.current}d` },
-                    { label: 'All-Time PR', value: fmt(stats.sessionPR) },
-                  ].map(({ label, value }) => (
-                    <div key={label}>
-                      <div className="enum" style={{ fontSize: 'clamp(1.2rem,5vw,2.2rem)', fontWeight: 700, lineHeight: 1 }}>{value}</div>
-                      <Lbl style={{ marginTop: '.25rem' }}>{label}</Lbl>
+                  {/* Top bar */}
+                  <div style={{ padding: '.6rem 1.25rem', borderBottom: `1px solid ${EDGE}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: SURF }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                      <div className={posState === 'down' ? 'down-dot' : 'up-dot'} style={{ width: 9, height: 9, borderRadius: '50%' }} />
+                      <span style={{ fontSize: '.6rem', letterSpacing: '.3em', color: DIM, textTransform: 'uppercase' }}>{posState === 'down' ? 'DOWN' : 'UP'}</span>
                     </div>
-                  ))}
+                    <span className="enum" style={{ fontSize: '.95rem', fontWeight: 700 }}>{fmt(stats.lifetime)} left</span>
+                  </div>
+
+                  {/* Camera */}
+                  <div style={{ flex: 1, position: 'relative', background: '#000', overflow: 'hidden' }}>
+                    <canvas ref={sessionDrawCvs} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+                    <canvas ref={sessionOvlCvs}  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }} />
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', padding: '1.5rem', pointerEvents: 'none' }}>
+                      <div style={{ position: 'relative' }}>
+                        {haloId && <div key={haloId} className="neon-ring" style={{ width: 220, height: 100, background: 'radial-gradient(ellipse,rgba(255,0,119,.4) 0%,transparent 70%)' }} />}
+                        <div className={`enum${flash ? ' flash' : ''}`}
+                          style={{ fontSize: 'clamp(3rem,16vw,7rem)', fontWeight: 900, lineHeight: 1, textShadow: '0 2px 20px rgba(0,0,0,.7)', WebkitTextStroke: '1px rgba(0,0,0,.25)' }}>
+                          {sessionReps}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '2rem', marginTop: '.5rem' }}>
+                        {[
+                          { label: 'Day PR',     value: stats.dayPR,     color: PINK },
+                          { label: 'Session PR', value: stats.sessionPR, color: ELEC },
+                        ].map(({ label, value, color }) => (
+                          <div key={label} style={{ textAlign: 'center' }}>
+                            <div style={{ fontFamily: "'Orbitron',monospace", fontSize: '1rem', fontWeight: 700, color, textShadow: `0 0 8px ${color},0 1px 8px rgba(0,0,0,.6)` }}>{value}</div>
+                            <div style={{ fontSize: '.5rem', letterSpacing: '.2em', color: 'rgba(255,255,255,.6)', textTransform: 'uppercase' }}>{label}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* End */}
+                  <div style={{ padding: '1rem 1.25rem', background: SURF, borderTop: `1.5px solid ${EDGE}` }}>
+                    <button className="primary-btn" onClick={handleEndSession}
+                      style={{ width: '100%', fontSize: '1rem', padding: '.85rem', fontFamily: "'Barlow Condensed', sans-serif", background: '#ff2244', boxShadow: '0 0 14px rgba(255,34,68,.5)' }}>
+                      End Session
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
