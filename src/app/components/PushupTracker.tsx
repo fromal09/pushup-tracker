@@ -58,12 +58,14 @@ const GRN  = '#00e57a';
 const NRED = '#ff2244';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function deriveSessions(reps: Rep[]): Session[] {
+function deriveSessions(reps: Rep[], breaks: number[] = []): Session[] {
   if (!reps.length) return [];
   const out: Session[] = [];
   let g: Rep[] = [reps[0]];
   for (let i = 1; i < reps.length; i++) {
-    if (reps[i].ts - reps[i - 1].ts < SESSION_GAP_MS) g.push(reps[i]);
+    const timeGap     = reps[i].ts - reps[i-1].ts >= SESSION_GAP_MS;
+    const forcedBreak = breaks.some(b => b > reps[i-1].ts && b <= reps[i].ts);
+    if (!timeGap && !forcedBreak) g.push(reps[i]);
     else { out.push(buildSess(g)); g = [reps[i]]; }
   }
   out.push(buildSess(g));
@@ -195,7 +197,12 @@ export default function PushupTracker() {
   const haloKey     = useRef<number>(0);
 
   const [tab,      setTab]      = useState<'track' | 'stats'>('track');
-  const setTabSynced = (t: 'track' | 'stats') => { tabRef.current = t; setTab(t); };
+  const setTabSynced = (t: 'track' | 'stats') => {
+    if (t !== 'track' && tabRef.current === 'track') {
+      setSessionBreaks(prev => [...prev, Date.now()]);
+    }
+    tabRef.current = t; setTab(t);
+  };
   const [phase,    setPhase]    = useState<'intro' | 'cal' | 'active'>('intro');
   const [calStep,  setCalStep]  = useState<'up' | 'down'>('up');
   const [calUp,    setCalUp]    = useState<number | null>(null);
@@ -207,8 +214,16 @@ export default function PushupTracker() {
   const [haloId,   setHaloId]   = useState<number | null>(null);
   const [badCal,   setBadCal]   = useState(false);
   const [reps,     setReps]     = useState<Rep[]>([]);
+  const [sessionBreaks, setSessionBreaks] = useState<number[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [saveErr,  setSaveErr]  = useState(false);
+
+  // ── Load saved calibration from localStorage
+  useEffect(() => {
+    const u = localStorage.getItem('pu_calUp');
+    const d = localStorage.getItem('pu_calDown');
+    if (u && d) { setCalUp(parseFloat(u)); setCalDown(parseFloat(d)); }
+  }, []);
 
   // ── Load reps from DB on mount ─────────────────────────────────────────────
   useEffect(() => {
@@ -231,7 +246,7 @@ export default function PushupTracker() {
   const stats: Stats = useMemo(() => {
     const done = reps.filter(r => r.complete);
     const fail = reps.filter(r => !r.complete);
-    const sessions   = deriveSessions(reps);
+    const sessions   = deriveSessions(reps, sessionBreaks);
     const streaks    = calcStreaks(reps);
     const todayStr   = new Date().toDateString();
     const todayN     = done.filter(r => new Date(r.ts).toDateString() === todayStr).length;
@@ -259,7 +274,7 @@ export default function PushupTracker() {
     return { total: done.length, incomplete: fail.length, sessions, streaks,
              todayN, weekN, dayDist, hourDist, failDay, bestSession: sorted[0] || null,
              avgPerSess, avgDepth, bestDay, lifetime, incRate, sessionPR, estDays };
-  }, [reps]);
+  }, [reps, sessionBreaks]);
 
   const sessionReps = useMemo(() => {
     if (!reps.length) return 0;
@@ -408,6 +423,8 @@ export default function PushupTracker() {
     if (calStep === 'up') { setCalUp(b); setCalStep('down'); }
     else {
       setCalDown(b);
+      localStorage.setItem('pu_calUp', String(calUp));
+      localStorage.setItem('pu_calDown', String(b));
       // DOWN lock = rep 1 at full depth
       const rep: Rep = { ts: Date.now(), complete: true, depth: 1.0 };
       setReps(p => [...p, rep]); saveRep(rep);
@@ -472,9 +489,15 @@ export default function PushupTracker() {
               </p>
             </div>
             <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-              <button className="primary-btn" onClick={handleBegin}
+              {calUp !== null && calDown !== null && (
+                <button className="primary-btn" onClick={() => { startCam(); setPhase('active'); }}
+                  style={{ fontSize: '1.1rem', padding: '1rem 2.75rem', fontFamily: "'Barlow Condensed', sans-serif", background: '#00c060', boxShadow: '0 0 14px rgba(0,192,96,.55)' }}>
+                  Resume ⚡
+                </button>
+              )}
+              <button className={calUp !== null && calDown !== null ? 'ghost-btn' : 'primary-btn'} onClick={handleBegin}
                 style={{ fontSize: '1.1rem', padding: '1rem 2.75rem', fontFamily: "'Barlow Condensed', sans-serif" }}>
-                Begin
+                {calUp !== null && calDown !== null ? 'Recalibrate' : 'Begin'}
               </button>
               {stats.total === 0 && (
                 <button className="ghost-btn"
@@ -587,7 +610,7 @@ export default function PushupTracker() {
                 </div>
                 <div style={{ display: 'flex', gap: '.5rem' }}>
                   <GhostBtn onClick={handleRecal}>Recal</GhostBtn>
-                  <GhostBtn onClick={() => { cancelAnimationFrame(raf.current); setPhase('intro'); }}>Done</GhostBtn>
+                  <GhostBtn onClick={() => { cancelAnimationFrame(raf.current); setSessionBreaks(prev => [...prev, Date.now()]); setPhase('intro'); }}>Done</GhostBtn>
                 </div>
               </div>
 
