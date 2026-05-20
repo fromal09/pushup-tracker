@@ -194,7 +194,11 @@ export default function PushupTracker() {
   const downMinBRef = useRef<number>(Infinity);
   const lastRepTs   = useRef<number>(0);
   const tabRef      = useRef<'track' | 'stats' | 'height'>('track');
-  const haloKey     = useRef<number>(0);
+  const haloKey      = useRef<number>(0);
+  const calPhaseRef  = useRef('position');
+  const calSamples   = useRef([]);
+  const calStabBuf   = useRef([]);
+  const cntDownStart = useRef(null);
 
   const [tab,      setTab]      = useState<'track' | 'stats' | 'height'>('track');
   const setTabSynced = (t: 'track' | 'stats' | 'height') => {
@@ -204,7 +208,9 @@ export default function PushupTracker() {
     tabRef.current = t; setTab(t);
   };
   const [phase,    setPhase]    = useState<'intro' | 'cal' | 'active'>('intro');
-  const [calStep,  setCalStep]  = useState<'up' | 'down'>('up');
+  const [calStep,    setCalStep]    = useState<'up' | 'down'>('up');
+  const [calCntDown, setCalCntDown] = useState(5);
+  const [calStable,  setCalStable]  = useState(false);
   const [calUp,    setCalUp]    = useState<number | null>(null);
   const [calDown,  setCalDown]  = useState<number | null>(null);
   const [posState, setPosState] = useState<'up' | 'down'>('up');
@@ -331,10 +337,11 @@ export default function PushupTracker() {
     }
   }, []);
 
-  // ── Calibration draw loop ──────────────────────────────────────────────────
+  // ── Calibration draw + auto-detect ─────────────────────────────────────────
   useEffect(() => {
     if (phase !== 'cal') return;
     let alive = true;
+    const STAB_WINDOW = 25, STAB_THRESHOLD = 5, COUNTDOWN_S = 5;
     const loop = () => {
       if (!alive) return;
       const dc = displayCvs.current, oc = overlayCvs.current, v = videoRef.current;
@@ -343,37 +350,93 @@ export default function PushupTracker() {
         const W = p?.offsetWidth || 320, H = p?.offsetHeight || 240;
         dc.width = W; dc.height = H; oc.width = W; oc.height = H;
         if (v && v.readyState >= 2 && v.videoWidth) {
-          const dctx = dc.getContext('2d')!;
+          const dctx = dc.getContext('2d');
           const vAR = v.videoWidth / v.videoHeight, cAR = W / H;
-          let sx: number, sy: number, sw: number, sh: number;
+          let sx, sy, sw, sh;
           if (vAR > cAR) { sh = v.videoHeight; sw = sh * cAR; sx = (v.videoWidth - sw) / 2; sy = 0; }
           else            { sw = v.videoWidth;  sh = sw / cAR; sx = 0; sy = (v.videoHeight - sh) / 2; }
           dctx.drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
         }
-        const ctx = oc.getContext('2d')!, cx = W / 2, cy = H / 2, r = Math.min(W, H) * 0.27;
+        const ctx = oc.getContext('2d');
         ctx.clearRect(0, 0, W, H);
-        ctx.save(); ctx.shadowColor = ELEC; ctx.shadowBlur = 14;
-        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.strokeStyle = ELEC; ctx.lineWidth = 1.5; ctx.setLineDash([7, 5]); ctx.stroke(); ctx.setLineDash([]);
-        [0, 90, 180, 270].forEach(deg => {
-          const a = deg * Math.PI / 180;
-          ctx.beginPath();
-          ctx.moveTo(cx + Math.cos(a) * r * 0.82, cy + Math.sin(a) * r * 0.82);
-          ctx.lineTo(cx + Math.cos(a) * r * 1.18, cy + Math.sin(a) * r * 1.18);
-          ctx.strokeStyle = ELEC; ctx.lineWidth = 2; ctx.stroke();
-        });
+        const cx = W / 2, cy = H / 2;
+        const rx = Math.min(W, H) * 0.28, ry = Math.min(W, H) * 0.40;
+        const isCD     = calPhaseRef.current === 'countdown';
+        const elapsed  = isCD && cntDownStart.current ? Date.now() - cntDownStart.current : 0;
+        const progress = Math.min(1, elapsed / (COUNTDOWN_S * 1000));
+        const secsLeft = Math.max(0, COUNTDOWN_S - Math.floor(elapsed / 1000));
+        const isReady  = calStabBuf.current.length >= STAB_WINDOW;
+        const ovalClr  = isCD ? '#00e57a' : isReady ? '#ffb800' : 'rgba(200,210,255,0.6)';
+        ctx.save();
+        ctx.shadowColor = ovalClr; ctx.shadowBlur = 20;
+        ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = ovalClr; ctx.lineWidth = 2.5;
+        ctx.setLineDash(isCD ? [] : [9, 6]); ctx.stroke(); ctx.setLineDash([]);
         ctx.restore();
-        ctx.save(); ctx.shadowColor = PINK; ctx.shadowBlur = 12;
-        ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fillStyle = PINK; ctx.fill(); ctx.restore();
-        ctx.save(); ctx.shadowColor = ELEC; ctx.shadowBlur = 6;
-        ctx.strokeStyle = 'rgba(26,63,255,.35)'; ctx.lineWidth = 1;
-        ctx.strokeRect(cx - 30, cy - 30, 60, 60); ctx.restore();
+        if (isCD) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(cx, cy, Math.min(W, H) * 0.46, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+          ctx.strokeStyle = '#00e57a'; ctx.lineWidth = 6;
+          ctx.shadowColor = '#00e57a'; ctx.shadowBlur = 14;
+          ctx.stroke(); ctx.restore();
+          ctx.save();
+          ctx.font = '900 ' + Math.round(Math.min(W, H) * 0.17) + 'px Arial Black, Arial, sans-serif';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#00e57a'; ctx.shadowColor = '#00e57a'; ctx.shadowBlur = 18;
+          ctx.fillText(String(secsLeft), cx, cy); ctx.restore();
+        }
+      }
+      // Auto-cal state machine
+      if (camReady) {
+        const b = sample();
+        if (b !== null) {
+          calStabBuf.current.push(b);
+          if (calStabBuf.current.length > STAB_WINDOW) calStabBuf.current.shift();
+          if (calPhaseRef.current === 'position' && calStabBuf.current.length >= STAB_WINDOW) {
+            const mean = calStabBuf.current.reduce((a, x) => a + x, 0) / calStabBuf.current.length;
+            const sd = Math.sqrt(calStabBuf.current.reduce((a, x) => a + (x - mean) ** 2, 0) / calStabBuf.current.length);
+            if (sd < STAB_THRESHOLD) {
+              calPhaseRef.current = 'countdown';
+              cntDownStart.current = Date.now();
+              calSamples.current = [];
+              setCalStable(true);
+            }
+          }
+          if (calPhaseRef.current === 'countdown' && cntDownStart.current !== null) {
+            calSamples.current.push(b);
+            const ms = Date.now() - cntDownStart.current;
+            setCalCntDown(Math.max(0, COUNTDOWN_S - Math.floor(ms / 1000)));
+            if (ms >= COUNTDOWN_S * 1000) {
+              const avg = calSamples.current.reduce((a, x) => a + x, 0) / calSamples.current.length;
+              if (calStep === 'up') {
+                setCalUp(avg);
+                setCalStep('down');
+                calPhaseRef.current = 'position';
+                calStabBuf.current = [];
+                cntDownStart.current = null;
+                setCalStable(false);
+                setCalCntDown(5);
+              } else {
+                setCalDown(avg);
+                localStorage.setItem('pu_calUp', String(calUp));
+                localStorage.setItem('pu_calDown', String(avg));
+                const rep = { ts: Date.now(), complete: true, depth: 1.0 };
+                setReps(p => [...p, rep]); saveRep(rep);
+                haloKey.current++; setHaloId(haloKey.current);
+                setFlash(true); setTimeout(() => setFlash(false), 260);
+                if (alive) setPhase('active');
+                return;
+              }
+            }
+          }
+        }
       }
       raf.current = requestAnimationFrame(loop);
     };
     raf.current = requestAnimationFrame(loop);
     return () => { alive = false; cancelAnimationFrame(raf.current); };
-  }, [phase]);
+  }, [phase, calStep, camReady, sample, saveRep, calUp]);
 
   // ── Active tracking loop ───────────────────────────────────────────────────
   useEffect(() => {
@@ -417,7 +480,17 @@ export default function PushupTracker() {
   }, [phase, calUp, calDown, sample, saveRep]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
-  const handleBegin = () => { startCam(); setPhase('cal'); setCalStep('up'); };
+  const handleBegin = () => {
+    calPhaseRef.current = 'position';
+    calSamples.current = [];
+    calStabBuf.current = [];
+    cntDownStart.current = null;
+    setCalCntDown(5);
+    setCalStable(false);
+    setCalStep('up');
+    startCam();
+    setPhase('cal');
+  };
   const handleLock  = () => {
     const b = sample(); if (b == null) return;
     if (calStep === 'up') { setCalUp(b); setCalStep('down'); }
@@ -557,18 +630,34 @@ export default function PushupTracker() {
           </div>
 
           <div style={{ padding: '1.25rem', borderTop: `1.5px solid ${EDGE}`, background: SURF }}>
-            <div style={{ fontSize: '.6rem', letterSpacing: '.3em', color: ELEC, textTransform: 'uppercase', marginBottom: '.4rem', textShadow: '0 0 8px rgba(26,63,255,.6)' }}>
-              {calStep === 'up' ? 'Arms Extended — UP Position' : 'Chest Down — DOWN Position · Rep 1'}
-            </div>
-            <div style={{ fontSize: '1rem', color: DIM, lineHeight: 1.6, marginBottom: '1.25rem' }}>
+            <div style={{ fontSize: '.6rem', letterSpacing: '.3em', textTransform: 'uppercase', marginBottom: '.4rem', transition: 'color .4s',
+              color: calStable ? GRN : ELEC,
+              textShadow: calStable ? `0 0 10px ${GRN}` : '0 0 8px rgba(26,63,255,.6)' }}>
               {calStep === 'up'
-                ? 'Get into push-up position above the phone. Arms fully extended. Centre your chest in the crosshair.'
-                : 'Lower all the way down. Hold at the bottom — locking this position counts as your first rep.'}
+                ? calStable ? `Holding UP — ${calCntDown}s…` : 'Step 1 — UP position'
+                : calStable ? `Holding DOWN — ${calCntDown}s…` : 'Step 2 — DOWN position · rep 1'}
             </div>
-            <button className="primary-btn" onClick={handleLock} disabled={!camReady}
-              style={{ width: '100%', fontSize: '1.05rem', padding: '.9rem', fontFamily: "'Barlow Condensed', sans-serif" }}>
-              {calStep === 'up' ? 'Lock UP →' : 'Lock DOWN — Rep 1 + Start Tracking'}
-            </button>
+            <div style={{ fontSize: '1rem', color: DIM, lineHeight: 1.7, marginBottom: '1rem' }}>
+              {calStep === 'up'
+                ? calStable
+                  ? 'Locked on. Hold completely still…'
+                  : 'Get in push-up position above the phone, arms fully extended. The oval turns green when steady — then hold 5 seconds.'
+                : calStable
+                  ? 'Locked on. Hold completely still…'
+                  : 'Lower your chest all the way to the floor. Hold still. The oval turns green when detected — this counts as rep one.'}
+            </div>
+            {camReady && (
+              <button className="ghost-btn" onClick={() => {
+                calPhaseRef.current = 'position';
+                calSamples.current = [];
+                calStabBuf.current = [];
+                cntDownStart.current = null;
+                setCalStable(false);
+                setCalCntDown(5);
+              }} style={{ width: '100%', fontSize: '.75rem', letterSpacing: '.18em', textTransform: 'uppercase', padding: '.65rem' }}>
+                Restart calibration
+              </button>
+            )}
           </div>
         </div>
       )}
