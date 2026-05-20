@@ -193,7 +193,7 @@ export default function PushupTracker() {
   const incTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downMinBRef = useRef<number>(Infinity);
   const lastRepTs   = useRef<number>(0);
-  const tabRef      = useRef<'track' | 'stats'>('track');
+  const tabRef      = useRef<'track' | 'stats' | 'height'>('track');
   const haloKey     = useRef<number>(0);
 
   const [tab,      setTab]      = useState<'track' | 'stats' | 'height'>('track');
