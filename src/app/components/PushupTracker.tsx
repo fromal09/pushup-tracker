@@ -195,10 +195,10 @@ export default function PushupTracker() {
   const lastRepTs   = useRef<number>(0);
   const tabRef      = useRef<'track' | 'stats' | 'height'>('track');
   const haloKey      = useRef<number>(0);
-  const calPhaseRef  = useRef('position');
-  const calSamples   = useRef([]);
-  const calStabBuf   = useRef([]);
-  const cntDownStart = useRef(null);
+  const calPhaseRef  = useRef<'position' | 'countdown'>('position');
+  const calSamples   = useRef<number[]>([]);
+  const calStabBuf   = useRef<number[]>([]);
+  const cntDownStart = useRef<number | null>(null);
 
   const [tab,      setTab]      = useState<'track' | 'stats' | 'height'>('track');
   const setTabSynced = (t: 'track' | 'stats' | 'height') => {
