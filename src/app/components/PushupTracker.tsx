@@ -6,7 +6,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 interface Rep {
   ts:       number;
   complete: boolean;
-  depth:    number;
 }
 
 interface Session {
@@ -16,7 +15,6 @@ interface Session {
   complete:   number;
   incomplete: number;
   total:      number;
-  avgDepth:   number;
 }
 
 interface Stats {
@@ -31,7 +29,6 @@ interface Stats {
   failDay:    number[];
   bestSession: Session | null;
   avgPerSess: number;
-  avgDepth:   number;
   bestDay:    [string, number] | null;
   lifetime:   number;
   incRate:    string;
@@ -83,7 +80,6 @@ function buildSess(g: Rep[]): Session {
     complete:   done.length,
     incomplete: fail.length,
     total:      g.length,
-    avgDepth:   done.length ? done.reduce((a, r) => a + r.depth, 0) / done.length : 0,
   };
 }
 
@@ -119,7 +115,7 @@ function makeDemoReps(): Rep[] {
       const count = 20 + Math.floor(Math.random() * 40);
       for (let r = 0; r < count; r++) {
         const complete = Math.random() > 0.06;
-        out.push({ ts: start + r * (2200 + Math.random() * 1800), complete, depth: complete ? 0.65 + Math.random() * 0.35 : 0.15 + Math.random() * 0.5 });
+        out.push({ ts: start + r * (2200 + Math.random() * 1800), complete });
       }
     }
     ts += 86400000;
@@ -247,6 +243,12 @@ export default function PushupTracker() {
   const lastRepTs   = useRef<number>(0);
   const tabRef      = useRef<'track' | 'stats' | 'height'>('track');
   const haloKey         = useRef<number>(0);
+  const faceDetAvail    = useRef<boolean>(false);
+  const faceDetector    = useRef<any>(null);
+  const latestFaceW     = useRef<number>(0);
+  const latestBrightness = useRef<number>(128);
+  const calFaceUpRef    = useRef<number>(0);
+  const calFaceSamples  = useRef<number[]>([]);
   const sessionDrawCvs  = useRef<HTMLCanvasElement>(null);
   const sessionOvlCvs   = useRef<HTMLCanvasElement>(null);
   const sessionDrawRaf  = useRef<number>(0);
@@ -279,6 +281,19 @@ export default function PushupTracker() {
   const [sessionBreaks, setSessionBreaks] = useState<number[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [saveErr,  setSaveErr]  = useState(false);
+
+
+  useEffect(() => {
+    if ('FaceDetector' in window) {
+      try {
+        faceDetector.current = new (window as any).FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+        faceDetAvail.current = true;
+        console.log('FaceDetector: available');
+      } catch (e) { console.log('FaceDetector init failed:', e); }
+    } else {
+      console.log('FaceDetector: not available — brightness only');
+    }
+  }, []);
 
   // ── Load saved calibration from localStorage
   useEffect(() => {
@@ -338,7 +353,14 @@ export default function PushupTracker() {
       sessionDrawRaf.current = requestAnimationFrame(loop);
     };
     sessionDrawRaf.current = requestAnimationFrame(loop);
-    return () => { alive = false; cancelAnimationFrame(sessionDrawRaf.current); };
+    const faceInterval = setInterval(async () => {
+      if (!faceDetector.current || !videoRef.current || videoRef.current.readyState < 2) return;
+      try {
+        const faces = await faceDetector.current.detect(videoRef.current);
+        latestFaceW.current = faces.length > 0 ? faces[0].boundingBox.width : 0;
+      } catch (e) {}
+    }, 150);
+    return () => { alive = false; cancelAnimationFrame(sessionDrawRaf.current); clearInterval(faceInterval); };
   }, [phase, sessionActive]);
 
   // ── Stats ──────────────────────────────────────────────────────────────────
@@ -360,7 +382,6 @@ export default function PushupTracker() {
     done.forEach(r => { const k = new Date(r.ts).toDateString(); dayReps[k] = (dayReps[k] || 0) + 1; });
     const bestDayArr = Object.entries(dayReps).sort((a, b) => b[1] - a[1]);
     const bestDay    = bestDayArr.length ? bestDayArr[0] as [string, number] : null;
-    const avgDepth   = done.length ? done.reduce((a, r) => a + r.depth, 0) / done.length : 0;
     const avgPerSess = sessions.length ? Math.round(done.length / sessions.length) : 0;
     const lifetime   = Math.max(0, GOAL - done.length);
     const incRate    = reps.length ? ((fail.length / reps.length) * 100).toFixed(1) : '0.0';
@@ -374,7 +395,7 @@ export default function PushupTracker() {
     }
     return { total: done.length, incomplete: fail.length, sessions, streaks,
              todayN, weekN, dayDist, hourDist, failDay, bestSession: sorted[0] || null,
-             avgPerSess, avgDepth, bestDay, lifetime, incRate, sessionPR, dayPR, estDays };
+             avgPerSess, bestDay, lifetime, incRate, sessionPR, dayPR, estDays };
   }, [reps, sessionBreaks]);
 
   const sessionReps = useMemo(() => {
@@ -404,6 +425,19 @@ export default function PushupTracker() {
     return () => document.removeEventListener('visibilitychange', onHide);
   }, []);
 
+
+  const getSignal = useCallback((calUpVal: number, calDownVal: number): number => {
+    const b     = latestBrightness.current;
+    const range = Math.max(1, calUpVal - calDownVal);
+    const bNorm = Math.max(0, Math.min(1, (b - calDownVal) / range));
+    if (!faceDetAvail.current || calFaceUpRef.current === 0) return bNorm;
+    const faceW       = latestFaceW.current;
+    const fNorm       = Math.min(1, faceW / calFaceUpRef.current);
+    const faceVisible = faceW > calFaceUpRef.current * 0.12;
+    const fWeight     = faceVisible ? 0.60 : 0.15;
+    return fNorm * fWeight + bNorm * (1 - fWeight);
+  }, []);
+
   // ── Brightness sampler ─────────────────────────────────────────────────────
   const sample = useCallback((): number | null => {
     const v = videoRef.current, c = samplerCvs.current;
@@ -414,7 +448,9 @@ export default function PushupTracker() {
     const d = ctx.getImageData(0, 0, S, S).data;
     let lum = 0;
     for (let i = 0; i < d.length; i += 4) lum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    return lum / (d.length / 4);
+    const result = lum / (d.length / 4);
+    latestBrightness.current = result;
+    return result;
   }, []);
 
   // ── Camera ─────────────────────────────────────────────────────────────────
@@ -501,12 +537,22 @@ export default function PushupTracker() {
           }
           if (calPhaseRef.current === 'countdown' && cntDownStart.current !== null) {
             calSamples.current.push(b);
+            if (calStep === 'up' && faceDetAvail.current && faceDetector.current && videoRef.current && videoRef.current.readyState >= 2) {
+              faceDetector.current.detect(videoRef.current).then((faces: any[]) => {
+                if (faces.length > 0) calFaceSamples.current.push(faces[0].boundingBox.width);
+              }).catch(() => {});
+            }
             const ms = Date.now() - cntDownStart.current;
             setCalCntDown(Math.max(0, COUNTDOWN_S - Math.floor(ms / 1000)));
             if (ms >= COUNTDOWN_S * 1000) {
               const avg = calSamples.current.reduce((a, x) => a + x, 0) / calSamples.current.length;
               if (calStep === 'up') {
                 setCalUp(avg);
+                if (calFaceSamples.current.length > 0) {
+                  calFaceUpRef.current = calFaceSamples.current.reduce((a, x) => a + x, 0) / calFaceSamples.current.length;
+                  calFaceSamples.current = [];
+                  console.log('Face UP calibrated:', calFaceUpRef.current);
+                }
                 setCalStep('down');
                 calPhaseRef.current = 'position';
                 calStabBuf.current = [];
@@ -540,8 +586,8 @@ export default function PushupTracker() {
     const range = calUp - calDown;
     if (range < 8) { setBadCal(true); return; }
     setBadCal(false);
-    const dnLine = calDown + range * 0.18;
-    const upLine = calUp   - range * 0.18;
+    const DN_THRESH = 0.28;
+    const UP_THRESH = 0.62;
     posRef.current = 'up'; downMinBRef.current = Infinity;
 
     const tick = () => {
@@ -552,17 +598,13 @@ export default function PushupTracker() {
           posRef.current = 'down'; setPosState('down'); downMinBRef.current = b;
           incTimer.current = setTimeout(() => {
             if (posRef.current !== 'down') return;
-            const raw = downMinBRef.current;
-            const depth = 1 - Math.max(0, Math.min(range, raw - calDown)) / range;
-            const rep: Rep = { ts: Date.now(), complete: false, depth };
+            const rep: Rep = { ts: Date.now(), complete: false };
             setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
             posRef.current = 'up'; setPosState('up'); downMinBRef.current = Infinity;
           }, INCOMPLETE_TIMEOUT_MS);
         } else if (posRef.current === 'down' && b >= upLine && tabRef.current === 'track') {
           clearTimeout(incTimer.current!);
-          const raw = downMinBRef.current;
-          const depth = 1 - Math.max(0, Math.min(range, raw - calDown)) / range;
-          const rep: Rep = { ts: Date.now(), complete: true, depth };
+          const rep: Rep = { ts: Date.now(), complete: true };
           setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
           setFlash(true); haloKey.current++; setHaloId(haloKey.current);
           setTimeout(() => setFlash(false), 260);
@@ -573,7 +615,7 @@ export default function PushupTracker() {
     };
     raf.current = requestAnimationFrame(tick);
     return () => { cancelAnimationFrame(raf.current); if (incTimer.current) clearTimeout(incTimer.current); };
-  }, [phase, sessionActive, calUp, calDown, sample, saveRep]);
+  }, [phase, sessionActive, calUp, calDown, sample, saveRep, getSignal]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   const handleBegin = () => {
@@ -584,6 +626,8 @@ export default function PushupTracker() {
     setCalCntDown(5);
     setCalStable(false);
     setCalStep('up');
+    calFaceSamples.current = [];
+    calFaceUpRef.current = 0;
     startCam();
     setPhase('cal');
   };
@@ -594,8 +638,8 @@ export default function PushupTracker() {
       setCalDown(b);
       localStorage.setItem('pu_calUp', String(calUp));
       localStorage.setItem('pu_calDown', String(b));
-      // DOWN lock = rep 1 at full depth
-      const rep: Rep = { ts: Date.now(), complete: true, depth: 1.0 };
+      // DOWN lock = rep 1
+      const rep: Rep = { ts: Date.now(), complete: true };
       setReps(p => [...p, rep]); saveRep(rep);
       setFlash(true); haloKey.current++; setHaloId(haloKey.current);
       setTimeout(() => setFlash(false), 260);
@@ -929,7 +973,6 @@ export default function PushupTracker() {
                     <Row label="Started"    value={fmtTime(stats.bestSession.startTs)} />
                     <Row label="Duration"   value={fmtDur(stats.bestSession.durationMs)} />
                     <Row label="Incomplete" value={stats.bestSession.incomplete} />
-                    <Row label="Avg depth"  value={`${(stats.bestSession.avgDepth * 100).toFixed(0)}%`} />
                   </Sect>
                 )}
 
@@ -948,11 +991,9 @@ export default function PushupTracker() {
                   ))}
                 </Sect>
 
-                <Sect title="Depth & Form">
-                  <Row label="Avg depth score" value={`${(stats.avgDepth * 100).toFixed(0)}%`} accent />
+                <Sect title="Form">
                   <Row label="Total incomplete" value={fmt(stats.incomplete)} />
                   <Row label="Incomplete rate"  value={`${stats.incRate}%`} />
-                  <div style={{ marginTop: '.75rem' }}><Lbl style={{ marginBottom: '.5rem' }}>Avg depth</Lbl><DepthBar value={stats.avgDepth} /></div>
                   <div style={{ marginTop: '1rem' }}><Lbl style={{ marginBottom: '.5rem' }}>Incomplete by day</Lbl><NeonBars data={stats.failDay} labels={['S','M','T','W','T','F','S']} color={NRED} glow={NRED} h={40} /></div>
                 </Sect>
 
@@ -1066,10 +1107,7 @@ function Row({ label, value, accent }: { label: string; value: string | number; 
     </div>
   );
 }
-function DepthBar({ value }: { value: number }) {
-  const color = value > 0.75 ? GRN : value > 0.45 ? ELEC : NRED;
-  return <div style={{ height: 6, background: EDGE, borderRadius: 3 }}><div style={{ height: '100%', width: `${Math.min(1, value) * 100}%`, background: color, borderRadius: 3, boxShadow: `0 0 8px ${color}` }} /></div>;
-}
+
 function NeonBars({ data, labels, color, glow, h }: { data: number[]; labels: string[]; color: string; glow: string; h: number }) {
   const max = Math.max(...data, 1);
   return (
