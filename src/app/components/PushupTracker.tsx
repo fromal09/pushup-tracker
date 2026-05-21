@@ -594,7 +594,8 @@ export default function PushupTracker() {
       const b = sample();
       if (b != null) {
         if (posRef.current === 'down') downMinBRef.current = Math.min(downMinBRef.current, b);
-        if (posRef.current === 'up' && b <= dnLine && Date.now() - lastRepTs.current > MIN_REP_MS && tabRef.current === 'track') {
+          const sig = getSignal(calUp, calDown);
+          if (posRef.current === 'up' && sig <= DN_THRESH && Date.now() - lastRepTs.current > MIN_REP_MS && tabRef.current === 'track') {
           posRef.current = 'down'; setPosState('down'); downMinBRef.current = b;
           incTimer.current = setTimeout(() => {
             if (posRef.current !== 'down') return;
@@ -602,7 +603,7 @@ export default function PushupTracker() {
             setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
             posRef.current = 'up'; setPosState('up'); downMinBRef.current = Infinity;
           }, INCOMPLETE_TIMEOUT_MS);
-        } else if (posRef.current === 'down' && b >= upLine && tabRef.current === 'track') {
+          } else if (posRef.current === 'down' && sig >= UP_THRESH && tabRef.current === 'track') {
           clearTimeout(incTimer.current!);
           const rep: Rep = { ts: Date.now(), complete: true };
           setReps(p => [...p, rep]); saveRep(rep); lastRepTs.current = Date.now();
