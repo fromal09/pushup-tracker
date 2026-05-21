@@ -473,7 +473,7 @@ export default function PushupTracker() {
   useEffect(() => {
     if (phase !== 'cal') return;
     let alive = true;
-    const STAB_WINDOW = 25, STAB_THRESHOLD = 5, COUNTDOWN_S = 5;
+    const STAB_WINDOW = 25, STAB_THRESHOLD = 5, COUNTDOWN_S = 2;
     const loop = () => {
       if (!alive) return;
       const dc = displayCvs.current, oc = overlayCvs.current, v = videoRef.current;
@@ -586,8 +586,8 @@ export default function PushupTracker() {
     const range = calUp - calDown;
     if (range < 8) { setBadCal(true); return; }
     setBadCal(false);
-    const DN_THRESH = 0.28;
-    const UP_THRESH = 0.62;
+    const DN_THRESH = 0.38;
+    const UP_THRESH = 0.52;
     posRef.current = 'up'; downMinBRef.current = Infinity;
 
     const tick = () => {
@@ -595,6 +595,7 @@ export default function PushupTracker() {
       if (b != null) {
         if (posRef.current === 'down') downMinBRef.current = Math.min(downMinBRef.current, b);
           const sig = getSignal(calUp, calDown);
+          console.log('[signal]', sig.toFixed(3), posRef.current, 'dn<', DN_THRESH, 'up>', UP_THRESH);
           if (posRef.current === 'up' && sig <= DN_THRESH && Date.now() - lastRepTs.current > MIN_REP_MS && tabRef.current === 'track') {
           posRef.current = 'down'; setPosState('down'); downMinBRef.current = b;
           incTimer.current = setTimeout(() => {
